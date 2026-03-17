@@ -5,10 +5,13 @@ import sys
 import streamlit as st
 from pymongo import MongoClient
 from pymongo.errors import PyMongoError
+from dotenv import load_dotenv
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.append(str(PROJECT_ROOT))
+
+load_dotenv(PROJECT_ROOT / ".env")
 
 from components.tabs import module_tabs
 
@@ -73,7 +76,7 @@ def _mean(values):
 
 @st.cache_resource
 def _get_mongo_client():
-    mongo_uri = os.getenv("MONGO_URI", "mongodb://localhost:27017/therapy_f35")
+    mongo_uri = os.getenv("MONGO_URI", "mongodb://localhost:27017/MONGO_DB")
     return MongoClient(mongo_uri, serverSelectionTimeoutMS=3000)
 
 
@@ -84,7 +87,6 @@ def _get_database():
 
 
 def _ensure_collections(db):
-    db.therapies.create_index("_id", unique=True)
     db.responses.create_index("therapy_id")
     db.side_effects.create_index("therapy_id")
     db.cost_analysis.create_index("therapy_id")
