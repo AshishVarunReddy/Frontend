@@ -3,8 +3,6 @@ import os
 import sys
 
 import streamlit as st
-from pymongo import MongoClient
-from pymongo.errors import PyMongoError
 from dotenv import load_dotenv
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
@@ -14,6 +12,7 @@ if str(PROJECT_ROOT) not in sys.path:
 load_dotenv(PROJECT_ROOT / ".env")
 
 from components.tabs import module_tabs
+from src.modules.module_f35.api_client import get_api_client
 
 
 MONGODB_SCHEMA = """
@@ -74,63 +73,67 @@ def _mean(values):
     return sum(values) / len(values)
 
 
-@st.cache_resource
-def _get_mongo_client():
-    mongo_uri = os.getenv("MONGO_URI", "mongodb://localhost:27017/MONGO_DB")
-    return MongoClient(mongo_uri, serverSelectionTimeoutMS=3000)
-
-
-def _get_database():
-    db_name = os.getenv("MONGO_DB", "therapy_database")
-    client = _get_mongo_client()
-    return client[db_name]
-
-
-def _ensure_collections(db):
-    db.responses.create_index("therapy_id")
-    db.side_effects.create_index("therapy_id")
-    db.cost_analysis.create_index("therapy_id")
-
-
 def _fetch_backend_data():
+    """
+    Fetch data from M35 API Backend instead of direct MongoDB
+    Data flows from: Collection Layer → M35 Backend → Frontend
+    """
     try:
-        db = _get_database()
-        _ensure_collections(db)
-        therapies = list(db.therapies.find({}, {"_id": 1, "name": 1, "therapy_type": 1, "start_date": 1, "end_date": 1, "cost_per_cycle": 1}))
-        responses = list(db.responses.find({}, {"_id": 1, "therapy_id": 1, "patient_id": 1, "clinical_improvement": 1, "symptom_relief": 1, "survival_days": 1, "response_grade": 1}))
-        side_effects = list(db.side_effects.find({}, {"_id": 1, "therapy_id": 1, "patient_id": 1, "adverse_event": 1, "toxicity_grade": 1, "tolerability": 1}))
-        cost_analysis = list(db.cost_analysis.find({}, {"_id": 1, "therapy_id": 1, "cycles": 1, "total_cost": 1, "qalys": 1}))
+        api_client = get_api_client(os.getenv("M35_API_BASE_URL", "http://localhost:5000"))
+        
+        # Check if backend is healthy
+        if not api_client.health_check():
+            return [], [], [], [], "Backend API not responding. Ensure M35 backend is running on port 5000"
+        
+        # Fetch data from M35 API endpoints
+        therapies = api_client.get_therapies(limit=1000)
+        responses = api_client.get_responses(limit=5000)
+        side_effects = api_client.get_side_effects(limit=5000)
+        
+        # Note: cost_analysis comes from responses if available
+        cost_analysis = []
+        
         return therapies, responses, side_effects, cost_analysis, None
-    except PyMongoError as exc:
-        return [], [], [], [], str(exc)
+    except Exception as exc:
+        return [], [], [], [], f"Failed to fetch data from M35 Backend: {str(exc)}"
 
 
 def _aggregate_metrics(therapies, responses, side_effects, cost_analysis):
-    cost_map = {item["therapy_id"]: item for item in cost_analysis}
+    """
+    Aggregate metrics from API data
+    Sends aggregated insights to Decision Support Layer (M13-M24)
+    """
     metrics = []
+    api_client = get_api_client(os.getenv("M35_API_BASE_URL", "http://localhost:5000"))
 
     for therapy in therapies:
-        therapy_id = therapy["therapy_id"]
-        therapy_responses = [r for r in responses if r["therapy_id"] == therapy_id]
-        therapy_side_effects = [s for s in side_effects if s["therapy_id"] == therapy_id]
+        therapy_id = therapy.get("_id") or therapy.get("therapy_id")
+        
+        # Filter responses and side effects for this therapy
+        therapy_responses = [r for r in responses if r.get("therapy_id") == therapy_id]
+        therapy_side_effects = [s for s in side_effects if s.get("therapy_id") == therapy_id]
 
-        avg_improvement = _mean([r["clinical_improvement"] for r in therapy_responses])
-        avg_symptom_relief = _mean([r["symptom_relief"] for r in therapy_responses])
-        avg_survival_days = _mean([r["survival_days"] for r in therapy_responses])
-        avg_toxicity = _mean([s["toxicity_grade"] for s in therapy_side_effects])
+        avg_improvement = _mean([r.get("clinical_improvement", 0) for r in therapy_responses])
+        avg_symptom_relief = _mean([r.get("symptom_relief", 0) for r in therapy_responses])
+        avg_survival_days = _mean([r.get("survival_days", 0) for r in therapy_responses])
+        avg_toxicity = _mean([s.get("toxicity_grade", 0) for s in therapy_side_effects])
 
         benefit_score = (avg_improvement + avg_symptom_relief + (avg_survival_days / 365) * 100) / 3
         benefit_risk_index = benefit_score / (1 + avg_toxicity)
 
-        cost_entry = cost_map.get(therapy_id)
+        # Try to get cost_per_qaly from API metrics endpoint
         cost_per_qaly = None
-        if cost_entry and cost_entry["qalys"]:
-            cost_per_qaly = cost_entry["total_cost"] / cost_entry["qalys"]
+        try:
+            metrics_data = api_client.get_metrics(str(therapy_id))
+            if metrics_data:
+                cost_per_qaly = metrics_data.get("cost_per_qaly")
+        except:
+            pass
 
         metrics.append(
             {
-                "therapy_id": therapy_id,
-                "name": therapy["name"],
+                "therapy_id": str(therapy_id),
+                "name": therapy.get("name", "Unknown"),
                 "avg_improvement": round(avg_improvement, 1),
                 "avg_symptom_relief": round(avg_symptom_relief, 1),
                 "avg_survival_days": round(avg_survival_days, 1),
@@ -152,7 +155,7 @@ def render_module_f35():
 
     tab = st.radio(
         "",
-        ["Home", "ER Diagram", "Tables", "MongoDB Queries", "Backend Logic", "Output"],
+        ["Home", "ER Diagram", "Tables", "MongoDB Queries", "Backend Logic", "Output", "📤 Send to DSL"],
         horizontal=True,
     )
     st.divider()
@@ -342,6 +345,89 @@ db.responses.aggregate([
 
         st.markdown("### Recommendation Logic")
         st.write("Select therapies with high benefit-risk index and lower cost per QALY.")
+
+    elif tab == "📤 Send to DSL":
+        st.markdown("### Therapy Recommendations → Decision Support Layer (M13-M24)")
+        st.info("This tab sends M35 recommendations to the Decision Support Layer for clinical decision making")
+        
+        api_client = get_api_client(os.getenv("M35_API_BASE_URL", "http://localhost:5000"))
+        recommendations = api_client.get_recommendations(limit=10)
+        
+        if not recommendations:
+            st.warning("No recommendations available. Ensure M35 backend is running and has data.")
+        else:
+            st.markdown("#### Top Therapy Recommendations")
+            
+            # Display as table
+            rec_data = []
+            for rec in recommendations:
+                rec_data.append({
+                    "Therapy": rec.get("name", "Unknown"),
+                    "Type": rec.get("therapy_type", "N/A"),
+                    "Benefit-Risk Index": rec.get("benefit_risk_index", 0),
+                    "Cost/QALY": f"${rec.get('cost_per_qaly', 0):.2f}" if rec.get('cost_per_qaly') else "N/A",
+                    "Rank Score": rec.get("rank_score", 0),
+                    "Responses": rec.get("response_count", 0)
+                })
+            
+            st.dataframe(rec_data, use_container_width=True)
+            
+            st.markdown("#### Send to Decision Support Layer")
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                target_module = st.selectbox(
+                    "Target DSL Module:",
+                    ["M13", "M14", "M15", "M16", "M17", "M18"],
+                    help="Select which Decision Support module to send recommendations to"
+                )
+            
+            with col2:
+                urgency = st.selectbox(
+                    "Urgency Level:",
+                    ["low", "medium", "high"],
+                    help="Set urgency for clinical decision making"
+                )
+            
+            patient_id = st.text_input("Patient ID (if applicable):", "")
+            
+            if st.button("🚀 Send Recommendations to Decision Support Layer", use_container_width=True):
+                if recommendations:
+                    # Send each recommendation to DSL
+                    success_count = 0
+                    for rec in recommendations[:3]:  # Send top 3 recommendations
+                        response = api_client.send_recommendation_to_dsl(
+                            recommendation_data=rec,
+                            target_dsl_module=target_module,
+                            patient_id=patient_id or "GENERAL",
+                            urgency=urgency
+                        )
+                        if response.get("status") == "success":
+                            success_count += 1
+                    
+                    if success_count > 0:
+                        st.success(f"✅ Sent {success_count} recommendations to Decision Support Layer ({target_module})")
+                        st.json({"status": "success", "count": success_count, "target": target_module})
+                    else:
+                        st.error("Failed to send recommendations. Ensure M35 backend is running.")
+            
+            st.markdown("---")
+            st.markdown("#### Data Flow Architecture")
+            st.code("""
+DATA COLLECTION LAYER (M1-M6, M25-M30, M43-M48)
+    ↓ (Raw clinical data)
+    M35 PROCESSING LAYER
+    ├─ Clinical Improvement: avg of all response scores
+    ├─ Symptom Relief: avg symptom relief percentages
+    ├─ Survival Analysis: avg survival days
+    ├─ Safety Profile: toxicity grades and adverse events
+    └─ Cost-Effectiveness: cost per QALY
+    ↓ (Aggregated insights)
+DECISION SUPPORT LAYER (M13-M24)
+    ├─ M13: Clinical Guidelines
+    ├─ M14-M18: Decision Support Modules
+    └─ Clinical Decision Making
+            """, language="text")
 
 
 if __name__ == "__main__":
