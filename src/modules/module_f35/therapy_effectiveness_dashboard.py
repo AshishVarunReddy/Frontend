@@ -1,7 +1,10 @@
 from pathlib import Path
+import os
 import sys
 
 import streamlit as st
+from pymongo import MongoClient
+from pymongo.errors import PyMongoError
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 if str(PROJECT_ROOT) not in sys.path:
@@ -10,48 +13,44 @@ if str(PROJECT_ROOT) not in sys.path:
 from components.tabs import module_tabs
 
 
-SCHEMA_SQL = """
-CREATE TABLE Therapy (
-    therapy_id VARCHAR(20) PRIMARY KEY,
-    name VARCHAR(120) NOT NULL,
-    therapy_type VARCHAR(40) NOT NULL,
-    start_date DATE NOT NULL,
-    end_date DATE,
-    cost_per_cycle DECIMAL(12, 2)
-);
+MONGODB_SCHEMA = """
+Collections:
+1) therapies
+   { _id: "T001", name, therapy_type, start_date, end_date, cost_per_cycle }
 
-CREATE TABLE Response (
-    response_id VARCHAR(20) PRIMARY KEY,
-    therapy_id VARCHAR(20) NOT NULL,
-    patient_id VARCHAR(20) NOT NULL,
-    clinical_improvement INT CHECK (clinical_improvement BETWEEN 0 AND 100),
-    symptom_relief INT CHECK (symptom_relief BETWEEN 0 AND 100),
-    survival_days INT,
-    response_grade VARCHAR(10),
-    recorded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (therapy_id) REFERENCES Therapy(therapy_id)
-);
+2) responses
+   { _id: "R1001", therapy_id: "T001", patient_id, clinical_improvement, symptom_relief, survival_days,
+     response_grade, recorded_at }
 
-CREATE TABLE SideEffect (
-    side_effect_id VARCHAR(20) PRIMARY KEY,
-    therapy_id VARCHAR(20) NOT NULL,
-    patient_id VARCHAR(20) NOT NULL,
-    adverse_event VARCHAR(120) NOT NULL,
-    toxicity_grade INT CHECK (toxicity_grade BETWEEN 0 AND 5),
-    tolerability VARCHAR(20),
-    noted_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (therapy_id) REFERENCES Therapy(therapy_id)
-);
+3) side_effects
+   { _id: "S501", therapy_id: "T001", patient_id, adverse_event, toxicity_grade, tolerability, noted_at }
 
-CREATE TABLE CostAnalysis (
-    analysis_id VARCHAR(20) PRIMARY KEY,
-    therapy_id VARCHAR(20) NOT NULL,
-    cycles INT NOT NULL,
-    total_cost DECIMAL(14, 2) NOT NULL,
-    qalys DECIMAL(6, 2),
-    analyzed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (therapy_id) REFERENCES Therapy(therapy_id)
-);
+4) cost_analysis
+   { _id: "C001", therapy_id: "T001", cycles, total_cost, qalys, analyzed_at }
+
+Indexes:
+- responses: { therapy_id: 1 }
+- side_effects: { therapy_id: 1 }
+- cost_analysis: { therapy_id: 1 }
+""".strip()
+
+
+MONGODB_EXAMPLES = """
+therapies
+{ _id: "T001", name: "Chemo Regimen A", therapy_type: "Chemotherapy",
+  start_date: "2026-01-10", end_date: "2026-03-10", cost_per_cycle: 12000 }
+
+responses
+{ _id: "R1001", therapy_id: "T001", patient_id: "P120", clinical_improvement: 65,
+  symptom_relief: 58, survival_days: 240, response_grade: "PR", recorded_at: ISODate("2026-02-05") }
+
+side_effects
+{ _id: "S501", therapy_id: "T001", patient_id: "P120", adverse_event: "Nausea",
+  toxicity_grade: 2, tolerability: "Moderate", noted_at: ISODate("2026-02-06") }
+
+cost_analysis
+{ _id: "C001", therapy_id: "T001", cycles: 4, total_cost: 48000, qalys: 0.65,
+  analyzed_at: ISODate("2026-03-01") }
 """.strip()
 
 
@@ -70,6 +69,38 @@ def _mean(values):
     if not values:
         return 0
     return sum(values) / len(values)
+
+
+@st.cache_resource
+def _get_mongo_client():
+    mongo_uri = os.getenv("MONGO_URI", "mongodb://localhost:27017/therapy_f35")
+    return MongoClient(mongo_uri, serverSelectionTimeoutMS=3000)
+
+
+def _get_database():
+    db_name = os.getenv("MONGO_DB", "therapy_database")
+    client = _get_mongo_client()
+    return client[db_name]
+
+
+def _ensure_collections(db):
+    db.therapies.create_index("_id", unique=True)
+    db.responses.create_index("therapy_id")
+    db.side_effects.create_index("therapy_id")
+    db.cost_analysis.create_index("therapy_id")
+
+
+def _fetch_backend_data():
+    try:
+        db = _get_database()
+        _ensure_collections(db)
+        therapies = list(db.therapies.find({}, {"_id": 1, "name": 1, "therapy_type": 1, "start_date": 1, "end_date": 1, "cost_per_cycle": 1}))
+        responses = list(db.responses.find({}, {"_id": 1, "therapy_id": 1, "patient_id": 1, "clinical_improvement": 1, "symptom_relief": 1, "survival_days": 1, "response_grade": 1}))
+        side_effects = list(db.side_effects.find({}, {"_id": 1, "therapy_id": 1, "patient_id": 1, "adverse_event": 1, "toxicity_grade": 1, "tolerability": 1}))
+        cost_analysis = list(db.cost_analysis.find({}, {"_id": 1, "therapy_id": 1, "cycles": 1, "total_cost": 1, "qalys": 1}))
+        return therapies, responses, side_effects, cost_analysis, None
+    except PyMongoError as exc:
+        return [], [], [], [], str(exc)
 
 
 def _aggregate_metrics(therapies, responses, side_effects, cost_analysis):
@@ -115,13 +146,17 @@ def render_module_f35():
     st.markdown("## Module 35: Therapy Effectiveness Evaluation System")
     st.caption("Category F - Case-Based Decision Support")
 
-    therapies = []
-    responses = []
-    side_effects = []
-    cost_analysis = []
+    therapies, responses, side_effects, cost_analysis, db_error = _fetch_backend_data()
 
-    tab = module_tabs()
+    tab = st.radio(
+        "",
+        ["Home", "ER Diagram", "Tables", "MongoDB Queries", "Backend Logic", "Output"],
+        horizontal=True,
+    )
     st.divider()
+
+    if db_error:
+        st.error(f"MongoDB connection error: {db_error}")
 
     if tab == "Home":
         st.markdown("### Objectives")
@@ -152,17 +187,21 @@ def render_module_f35():
     elif tab == "ER Diagram":
         st.markdown("### Entity Relationship Diagram")
         st.code(
-            """
+                        """
 Therapy (therapy_id PK)
-  |--< Response (response_id PK, therapy_id FK, patient_id, clinical_improvement, symptom_relief, survival_days)
-  |--< SideEffect (side_effect_id PK, therapy_id FK, patient_id, adverse_event, toxicity_grade, tolerability)
-  |--< CostAnalysis (analysis_id PK, therapy_id FK, cycles, total_cost, qalys)
+    1 |--< N Response (response_id PK, therapy_id FK, patient_id, clinical_improvement, symptom_relief, survival_days)
+    1 |--< N SideEffect (side_effect_id PK, therapy_id FK, patient_id, adverse_event, toxicity_grade, tolerability)
+    1 |--< N CostAnalysis (analysis_id PK, therapy_id FK, cycles, total_cost, qalys)
+
+TherapySummary (therapy_id PK)
+    1 |-- 1 TherapySummary (avg_improvement, avg_symptom_relief, avg_toxicity, benefit_risk_index, cost_per_qaly)
 """.strip(),
-            language="text",
-        )
+                        language="text",
+                )
 
     elif tab == "Tables":
-        st.info("Tables are shown once backend data is connected.")
+        if not therapies and not responses and not side_effects and not cost_analysis:
+            st.info("No data found in MongoDB collections yet.")
         st.markdown("### Therapy")
         st.table(therapies)
 
@@ -175,81 +214,108 @@ Therapy (therapy_id PK)
         st.markdown("### CostAnalysis")
         st.table(cost_analysis)
 
-    elif tab == "SQL Query":
-        st.markdown("### Schema (DDL)")
-        st.code(SCHEMA_SQL, language="sql")
+    elif tab == "MongoDB Queries":
+        st.markdown("### MongoDB Schema")
+        st.code(MONGODB_SCHEMA, language="text")
+
+        st.markdown("### Example Documents")
+        st.code(MONGODB_EXAMPLES, language="javascript")
 
         st.markdown("### API Contract")
         st.json(API_CONTRACT)
 
-        st.markdown("### Sample SQL Queries")
+        st.markdown("### Sample MongoDB Aggregations")
         st.code(
-            """
--- Benefit calculation per therapy
-SELECT
-    r.therapy_id,
-    AVG(r.clinical_improvement) AS avg_improvement,
-    AVG(r.symptom_relief) AS avg_symptom_relief,
-    AVG(r.survival_days) AS avg_survival_days
-FROM Response r
-GROUP BY r.therapy_id;
+                        """
+// Benefit calculation per therapy
+db.responses.aggregate([
+    {
+        $group: {
+            _id: "$therapy_id",
+            avg_improvement: { $avg: "$clinical_improvement" },
+            avg_symptom_relief: { $avg: "$symptom_relief" },
+            avg_survival_days: { $avg: "$survival_days" }
+        }
+    }
+]);
 
--- Cost per QALY
-SELECT
-    c.therapy_id,
-    c.total_cost / NULLIF(c.qalys, 0) AS cost_per_qaly
-FROM CostAnalysis c;
+// Cost per QALY
+db.cost_analysis.aggregate([
+    {
+        $project: {
+            therapy_id: 1,
+            cost_per_qaly: {
+                $cond: [
+                    { $gt: ["$qalys", 0] },
+                    { $divide: ["$total_cost", "$qalys"] },
+                    null
+                ]
+            }
+        }
+    }
+]);
 
--- Comparative effectiveness with toxicity
-SELECT
-    t.therapy_id,
-    t.name,
-    AVG(r.clinical_improvement) AS avg_improvement,
-    AVG(s.toxicity_grade) AS avg_toxicity
-FROM Therapy t
-JOIN Response r ON t.therapy_id = r.therapy_id
-LEFT JOIN SideEffect s ON t.therapy_id = s.therapy_id
-GROUP BY t.therapy_id, t.name;
+// Comparative effectiveness with toxicity
+db.therapies.aggregate([
+    {
+        $lookup: {
+            from: "responses",
+            localField: "_id",
+            foreignField: "therapy_id",
+            as: "responses"
+        }
+    },
+    {
+        $lookup: {
+            from: "side_effects",
+            localField: "_id",
+            foreignField: "therapy_id",
+            as: "side_effects"
+        }
+    },
+    {
+        $project: {
+            therapy_id: "$_id",
+            name: 1,
+            avg_improvement: { $avg: "$responses.clinical_improvement" },
+            avg_toxicity: { $avg: "$side_effects.toxicity_grade" }
+        }
+    }
+]);
 """.strip(),
-            language="sql",
-        )
+                        language="javascript",
+                )
 
-    elif tab == "Triggers":
-        st.markdown("### Triggers and Procedures")
-        st.code(
-            """
--- Trigger to update therapy summary after response insert
-CREATE TRIGGER trg_update_therapy_summary
-AFTER INSERT ON Response
-FOR EACH ROW
-BEGIN
-    UPDATE TherapySummary
-    SET avg_improvement = (
-        SELECT AVG(clinical_improvement)
-        FROM Response
-        WHERE therapy_id = NEW.therapy_id
-    ),
-    avg_symptom_relief = (
-        SELECT AVG(symptom_relief)
-        FROM Response
-        WHERE therapy_id = NEW.therapy_id
-    )
-    WHERE therapy_id = NEW.therapy_id;
-END;
+    elif tab == "Backend Logic":
+                st.markdown("### Backend Logic (MongoDB)")
+                st.code(
+                        """
+// Change stream listener to refresh summary collection
+// Pseudocode: watch responses and side_effects inserts
+db.responses.watch([ { $match: { operationType: "insert" } } ])
+    .on("change", (event) => {
+        // recompute summary for event.fullDocument.therapy_id
+    });
 
--- Procedure to compute benefit-risk index
-CREATE PROCEDURE sp_compute_benefit_risk()
-BEGIN
-    UPDATE TherapySummary
-    SET benefit_risk_index = (avg_improvement + avg_symptom_relief) / (1 + avg_toxicity_grade);
-END;
+// Materialized summary via aggregation pipeline
+db.responses.aggregate([
+    {
+        $group: {
+            _id: "$therapy_id",
+            avg_improvement: { $avg: "$clinical_improvement" },
+            avg_symptom_relief: { $avg: "$symptom_relief" }
+        }
+    },
+    { $merge: { into: "therapy_summary", on: "_id", whenMatched: "replace" } }
+]);
 """.strip(),
-            language="sql",
-        )
+                        language="javascript",
+                )
 
     elif tab == "Output":
         st.markdown("### Benefit and Risk Summary")
-        st.info("Summary metrics will appear after backend data is available.")
+        if not therapies:
+            st.info("Summary metrics will appear after backend data is available.")
         metrics = _aggregate_metrics(therapies, responses, side_effects, cost_analysis)
 
         top_col1, top_col2, top_col3 = st.columns(3)
