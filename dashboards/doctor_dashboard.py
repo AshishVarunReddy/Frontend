@@ -116,12 +116,13 @@ CATEGORIES = {
         "title": "Analytics & Reporting",
         "description": "Data analytics, KPIs, and business intelligence",
         "icon": "📊",
-        "stats": {"modules": "4", "records": "125,600", "alerts": "4"},
+        "stats": {"modules": "5", "records": "150,600", "alerts": "4"},
         "modules": [
             ("I1", "Hospital Performance Dashboard", "KPI tracking and metrics", 15, 78900),
             ("I2", "Clinical Outcomes Analysis", "Treatment effectiveness", 12, 46700),
             ("I3", "Financial Analytics", "Revenue and cost analysis", 10, 32100),
-            ("I4", "Predictive Analytics", "AI-powered predictions", 18, 18900)
+            ("I4", "Predictive Analytics", "AI-powered predictions", 18, 18900),
+            ("I5", "Therapy Effectiveness Dashboard", "Analysis of therapy effectiveness and outcomes", 8, 25000)
         ]
     }
 }
