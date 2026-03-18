@@ -11,7 +11,7 @@ http://localhost:5000
 ```
 GET /api/m35/health
 ```
-Check if backend is running and connected to MongoDB.
+Check if backend is running.
 
 ---
 

@@ -14,7 +14,7 @@ Module M35 (Therapy Effectiveness Dashboard) operates in a four-tier healthcare 
 ├─────────────────────────────────────┤
 │ SECURITY & DELIVERY LAYER(M37-M42)  │  ← Secure delivery
 ├─────────────────────────────────────┤
-│ CORE DATABASE LAYER                 │  ← PostgreSQL/MongoDB
+│ STORAGE LAYER                       │  ← In-memory store
 └─────────────────────────────────────┘
 ```
 
@@ -24,14 +24,12 @@ Module M35 (Therapy Effectiveness Dashboard) operates in a four-tier healthcare 
 
 ```bash
 # Navigate to backend directory
-cd C:\Users\prath\OneDrive\Desktop\DBMS_PROJECT\Frontend\backend
+cd C:\Users\prath\OneDrive\Desktop\DBMS_PROJECT\Frontend\src\modules\module_f35\backend
 
 # Install dependencies
 pip install -r requirements.txt
 
 # Set environment variables (.env file)
-# MONGO_URI=mongodb://localhost:27017
-# MONGO_DB=therapy_database
 # M35_API_BASE_URL=http://localhost:5000
 
 # Run the Flask server
@@ -347,16 +345,13 @@ response = api_client.send_recommendation_to_dsl(
 # Check if Flask server is running
 netstat -ano | findstr :5000
 
-# Verify MongoDB connection
-mongosh --host localhost:27017
+# No database setup required (in-memory store)
 ```
 
 ### Database connection error
 
 Check `.env` file:
 ```
-MONGO_URI=mongodb://localhost:27017
-MONGO_DB=therapy_database
 M35_API_BASE_URL=http://localhost:5000
 ```
 
@@ -364,7 +359,7 @@ M35_API_BASE_URL=http://localhost:5000
 
 1. Verify backend health: `curl http://localhost:5000/api/m35/health`
 2. Check ingestion endpoints are receiving data
-3. Ensure MongoDB collections exist and have documents
+3. Ensure data is ingested through the API endpoints
 
 ## Integration with Decision Support Layer
 
@@ -378,7 +373,7 @@ The `/api/m35/recommendation/send-to-dsl` endpoint integrates M35 with DSL modul
 
 ## Next Steps
 
-1. **Configure MongoDB**: Ensure MongoDB is running with correct credentials
+1. **Start Backend**: Ensure the Flask API is running on port 5000
 2. **Run Backend**: Start `api_m35.py` on port 5000
 3. **Run Frontend**: Open Streamlit dashboard, verify "📤 Send to DSL" tab
 4. **Integration**: Connect with Decision Support Layer endpoints once available

@@ -4,27 +4,28 @@ Data Flow: Collection Layer (M1-M6, M25-M30) → M35 (Processing) → Decision S
 """
 
 from flask import Flask, request, jsonify
-from pymongo import MongoClient
-from pymongo.errors import PyMongoError
 from datetime import datetime
-from dotenv import load_dotenv
-import os
-from pathlib import Path
-
-# Load environment variables
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
-load_dotenv(PROJECT_ROOT / ".env")
+from uuid import uuid4
 
 app = Flask(__name__)
 
-# MongoDB Connection
-MONGO_URI = os.getenv("MONGO_URI", "mongodb://localhost:27017/MONGO_DB")
-MONGO_DB = os.getenv("MONGO_DB", "therapy_database")
+DATA_STORE = {
+    "therapies": [],
+    "responses": [],
+    "side_effects": [],
+    "cost_analysis": [],
+}
 
-def get_db():
-    """Get MongoDB database connection"""
-    client = MongoClient(MONGO_URI, serverSelectionTimeoutMS=3000)
-    return client[MONGO_DB]
+
+def _new_id(prefix):
+    return f"{prefix}_{uuid4().hex[:8]}"
+
+
+def _find_by_id(items, item_id):
+    for item in items:
+        if item.get("_id") == item_id:
+            return item
+    return None
 
 # ==================================================================================
 # DATA COLLECTION LAYER → M35 (Data Ingestion)
@@ -49,9 +50,8 @@ def ingest_therapy():
     """
     try:
         data = request.json
-        db = get_db()
-        
         therapy_doc = {
+            "_id": _new_id("T"),
             "name": data.get("name"),
             "therapy_type": data.get("therapy_type"),
             "start_date": data.get("start_date"),
@@ -61,11 +61,11 @@ def ingest_therapy():
             "created_at": datetime.utcnow(),
             "updated_at": datetime.utcnow()
         }
-        
-        result = db.therapies.insert_one(therapy_doc)
+
+        DATA_STORE["therapies"].append(therapy_doc)
         return jsonify({
             "status": "success",
-            "therapy_id": str(result.inserted_id),
+            "therapy_id": therapy_doc["_id"],
             "message": "Therapy ingested successfully"
         }), 201
         
@@ -92,9 +92,8 @@ def ingest_response():
     """
     try:
         data = request.json
-        db = get_db()
-        
         response_doc = {
+            "_id": _new_id("R"),
             "therapy_id": data.get("therapy_id"),
             "patient_id": data.get("patient_id"),
             "clinical_improvement": data.get("clinical_improvement"),
@@ -104,11 +103,11 @@ def ingest_response():
             "source_module": data.get("source_module", "M2"),
             "recorded_at": datetime.utcnow()
         }
-        
-        result = db.responses.insert_one(response_doc)
+
+        DATA_STORE["responses"].append(response_doc)
         return jsonify({
             "status": "success",
-            "response_id": str(result.inserted_id),
+            "response_id": response_doc["_id"],
             "message": "Response recorded successfully"
         }), 201
         
@@ -134,9 +133,8 @@ def ingest_side_effect():
     """
     try:
         data = request.json
-        db = get_db()
-        
         side_effect_doc = {
+            "_id": _new_id("S"),
             "therapy_id": data.get("therapy_id"),
             "patient_id": data.get("patient_id"),
             "adverse_event": data.get("adverse_event"),
@@ -145,11 +143,11 @@ def ingest_side_effect():
             "source_module": data.get("source_module", "M5"),
             "noted_at": datetime.utcnow()
         }
-        
-        result = db.side_effects.insert_one(side_effect_doc)
+
+        DATA_STORE["side_effects"].append(side_effect_doc)
         return jsonify({
             "status": "success",
-            "side_effect_id": str(result.inserted_id),
+            "side_effect_id": side_effect_doc["_id"],
             "message": "Side effect recorded successfully"
         }), 201
         
@@ -174,9 +172,8 @@ def ingest_cost_analysis():
     """
     try:
         data = request.json
-        db = get_db()
-        
         cost_doc = {
+            "_id": _new_id("C"),
             "therapy_id": data.get("therapy_id"),
             "cycles": data.get("cycles"),
             "total_cost": data.get("total_cost"),
@@ -184,11 +181,11 @@ def ingest_cost_analysis():
             "source_module": data.get("source_module", "M25"),
             "analyzed_at": datetime.utcnow()
         }
-        
-        result = db.cost_analysis.insert_one(cost_doc)
+
+        DATA_STORE["cost_analysis"].append(cost_doc)
         return jsonify({
             "status": "success",
-            "cost_analysis_id": str(result.inserted_id),
+            "cost_analysis_id": cost_doc["_id"],
             "message": "Cost analysis recorded successfully"
         }), 201
         
@@ -207,16 +204,12 @@ def get_therapies():
     Query params: ?therapy_type=Chemotherapy&limit=10
     """
     try:
-        db = get_db()
         therapy_type = request.args.get('therapy_type')
         limit = int(request.args.get('limit', 100))
-        
-        query = {} if not therapy_type else {"therapy_type": therapy_type}
-        therapies = list(db.therapies.find(query).limit(limit))
-        
-        # Convert ObjectId to string
-        for therapy in therapies:
-            therapy['_id'] = str(therapy['_id'])
+        therapies = DATA_STORE["therapies"]
+        if therapy_type:
+            therapies = [t for t in therapies if t.get("therapy_type") == therapy_type]
+        therapies = therapies[:limit]
         
         return jsonify({
             "status": "success",
@@ -232,14 +225,11 @@ def get_therapies():
 def get_therapy(therapy_id):
     """GET specific therapy details"""
     try:
-        from bson import ObjectId
-        db = get_db()
-        therapy = db.therapies.find_one({"_id": ObjectId(therapy_id)})
+        therapy = _find_by_id(DATA_STORE["therapies"], therapy_id)
         
         if not therapy:
             return jsonify({"status": "error", "message": "Therapy not found"}), 404
         
-        therapy['_id'] = str(therapy['_id'])
         return jsonify({"status": "success", "data": therapy}), 200
         
     except Exception as e:
@@ -253,21 +243,15 @@ def get_responses():
     Query params: ?therapy_id=<id>&patient_id=P120&limit=10
     """
     try:
-        db = get_db()
         therapy_id = request.args.get('therapy_id')
         patient_id = request.args.get('patient_id')
         limit = int(request.args.get('limit', 100))
-        
-        query = {}
+        responses = DATA_STORE["responses"]
         if therapy_id:
-            query['therapy_id'] = therapy_id
+            responses = [r for r in responses if r.get("therapy_id") == therapy_id]
         if patient_id:
-            query['patient_id'] = patient_id
-        
-        responses = list(db.responses.find(query).limit(limit))
-        
-        for response in responses:
-            response['_id'] = str(response['_id'])
+            responses = [r for r in responses if r.get("patient_id") == patient_id]
+        responses = responses[:limit]
         
         return jsonify({
             "status": "success",
@@ -286,21 +270,15 @@ def get_side_effects():
     Query params: ?therapy_id=<id>&patient_id=P120&limit=10
     """
     try:
-        db = get_db()
         therapy_id = request.args.get('therapy_id')
         patient_id = request.args.get('patient_id')
         limit = int(request.args.get('limit', 100))
-        
-        query = {}
+        side_effects = DATA_STORE["side_effects"]
         if therapy_id:
-            query['therapy_id'] = therapy_id
+            side_effects = [s for s in side_effects if s.get("therapy_id") == therapy_id]
         if patient_id:
-            query['patient_id'] = patient_id
-        
-        side_effects = list(db.side_effects.find(query).limit(limit))
-        
-        for side_effect in side_effects:
-            side_effect['_id'] = str(side_effect['_id'])
+            side_effects = [s for s in side_effects if s.get("patient_id") == patient_id]
+        side_effects = side_effects[:limit]
         
         return jsonify({
             "status": "success",
@@ -319,13 +297,10 @@ def get_therapy_metrics(therapy_id):
     Returns: avg_improvement, avg_symptom_relief, avg_toxicity, benefit_risk_index, cost_per_qaly
     """
     try:
-        from bson import ObjectId
-        db = get_db()
-        
         # Fetch responses
-        responses = list(db.responses.find({"therapy_id": therapy_id}))
-        side_effects = list(db.side_effects.find({"therapy_id": therapy_id}))
-        cost = db.cost_analysis.find_one({"therapy_id": therapy_id})
+        responses = [r for r in DATA_STORE["responses"] if r.get("therapy_id") == therapy_id]
+        side_effects = [s for s in DATA_STORE["side_effects"] if s.get("therapy_id") == therapy_id]
+        cost = next((c for c in DATA_STORE["cost_analysis"] if c.get("therapy_id") == therapy_id), None)
         
         if not responses:
             return jsonify({"status": "error", "message": "No data for this therapy"}), 404
@@ -382,19 +357,15 @@ def get_recommendations():
     Returns: Top therapies ranked by benefit-risk index and cost-effectiveness
     """
     try:
-        db = get_db()
         limit = int(request.args.get('limit', 5))
-        
-        # Get all therapies
-        therapies = list(db.therapies.find({}))
+        therapies = DATA_STORE["therapies"]
         recommendations = []
         
         for therapy in therapies:
-            therapy_id = str(therapy['_id'])
-            
-            responses = list(db.responses.find({"therapy_id": therapy_id}))
-            side_effects = list(db.side_effects.find({"therapy_id": therapy_id}))
-            cost = db.cost_analysis.find_one({"therapy_id": therapy_id})
+            therapy_id = therapy.get("_id")
+            responses = [r for r in DATA_STORE["responses"] if r.get("therapy_id") == therapy_id]
+            side_effects = [s for s in DATA_STORE["side_effects"] if s.get("therapy_id") == therapy_id]
+            cost = next((c for c in DATA_STORE["cost_analysis"] if c.get("therapy_id") == therapy_id), None)
             
             if not responses:
                 continue
@@ -487,19 +458,11 @@ def send_recommendation_to_dsl():
 def health_check():
     """Health check endpoint to verify M35 backend is running"""
     try:
-        db = get_db()
-        db.command('ping')
         return jsonify({
             "status": "healthy",
             "module": "M35 - Therapy Effectiveness Dashboard",
-            "database": "connected"
+            "storage": "in-memory"
         }), 200
-    except Exception as e:
-        return jsonify({
-            "status": "unhealthy",
-            "module": "M35 - Therapy Effectiveness Dashboard",
-            "error": str(e)
-        }), 500
 
 
 if __name__ == '__main__':

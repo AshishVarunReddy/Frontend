@@ -7,31 +7,14 @@
 pip install -r requirements.txt
 ```
 
-### 2. Configure Environment
-Create `.env` file in the project root (copy from `.env.example`):
-```
-MONGO_URI=mongodb://localhost:27017
-MONGO_DB=therapy_database
-M35_API_BASE_URL=http://localhost:5000
-```
-
-### 3. Ensure MongoDB is Running
-```bash
-# Start MongoDB
-mongod --dbpath "your_data_path"
-
-# Verify connection
-mongosh --host localhost:27017
-```
-
-### 4. Start M35 Backend API
+### 2. Start M35 Backend API
 ```bash
 python api_m35.py
 ```
 
 Backend runs on: **http://localhost:5000**
 
-### 5. Test the API
+### 3. Test the API
 ```bash
 # In another terminal
 python test_api.py
@@ -151,14 +134,8 @@ Decision Support Layer (M13-M24)
 ## Troubleshooting
 
 ### Backend not starting
-- Check MongoDB is running: `mongosh --host localhost:27017`
 - Verify port 5000 is available: `netstat -ano | findstr :5000`
 - Check Python version: `python --version` (needs 3.8+)
-
-### Database connection error
-- Verify `.env` file has correct `MONGO_URI`
-- Ensure MongoDB instance is running
-- Check MongoDB connection: `mongosh`
 
 ### API returning errors
 - Check request JSON format
@@ -184,7 +161,6 @@ Decision Support Layer (M13-M24)
 
 ## Performance
 
-- MongoDB indexes on `therapy_id` for fast filtering
 - Requests timeout at 5 seconds
 - Caching disabled for real-time data
 - Limit results with `limit` query parameter
@@ -196,7 +172,6 @@ Decision Support Layer (M13-M24)
 - HIPAA-ready data structure (can add HIPAA compliance layer)
 - Audit trail tracked via `source_module` and timestamps
 - Data validation on all inputs
-- ACID-compliant MongoDB with proper indexing
 
 ---
 

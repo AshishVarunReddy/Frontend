@@ -1,7 +1,6 @@
 # Module M35 - Quick Start Checklist ✅
 
 ## Pre-Setup
-- [ ] Ensure MongoDB is installed and running
 - [ ] Python 3.8+ installed
 - [ ] Git repository ready
 
@@ -9,34 +8,14 @@
 
 ### Step 1: Install Backend Dependencies
 ```bash
-cd C:\Users\prath\OneDrive\Desktop\DBMS_PROJECT\Frontend\backend
+cd C:\Users\prath\OneDrive\Desktop\DBMS_PROJECT\Frontend\src\modules\module_f35\backend
 pip install -r requirements.txt
 ```
 **Expected output**: All packages installed successfully
 
-### Step 2: Create .env File
-Copy `.env.example` to `.env` in project root:
-```
-C:\Users\prath\OneDrive\Desktop\DBMS_PROJECT\Frontend\.env
-```
-
-Content:
-```
-MONGO_URI=mongodb://localhost:27017
-MONGO_DB=therapy_database
-M35_API_BASE_URL=http://localhost:5000
-```
-
-### Step 3: Verify MongoDB Connection
+### Step 2: Start M35 Backend API
 ```bash
-mongosh --host localhost:27017
-# Should connect without errors
-# Type: exit
-```
-
-### Step 4: Start M35 Backend API
-```bash
-cd C:\Users\prath\OneDrive\Desktop\DBMS_PROJECT\Frontend\backend
+cd C:\Users\prath\OneDrive\Desktop\DBMS_PROJECT\Frontend\src\modules\module_f35\backend
 python api_m35.py
 ```
 **Expected output**:
@@ -45,9 +24,9 @@ python api_m35.py
  * Running on http://127.0.0.1:5000
 ```
 
-### Step 5: Test Backend (New Terminal)
+### Step 3: Test Backend (New Terminal)
 ```bash
-cd C:\Users\prath\OneDrive\Desktop\DBMS_PROJECT\Frontend\backend
+cd C:\Users\prath\OneDrive\Desktop\DBMS_PROJECT\Frontend\src\modules\module_f35\backend
 python test_api.py
 ```
 **Expected output**: Test suite runs and shows ✅ completion
@@ -159,21 +138,9 @@ requests.post(
 )
 ```
 
-### Method 2: Direct MongoDB Ingestion
-```bash
-mongosh
-use therapy_database
-db.therapies.insertOne({
-    name: "Chemo A",
-    therapy_type: "Chemotherapy",
-    ...
-})
-```
-
 ## Verification Checklist
 
 - [ ] Backend running on port 5000
-- [ ] MongoDB connected and responsive
 - [ ] Health check endpoint returns 200
 - [ ] Test API suite passes
 - [ ] Streamlit dashboard loads M35 module
@@ -186,10 +153,10 @@ db.therapies.insertOne({
 
 | Document | Purpose | Location |
 |----------|---------|----------|
-| **ARCHITECTURE_SUMMARY.md** | Complete system design | `/backend/` |
-| **M35_INTEGRATION_GUIDE.md** | Integration instructions | `/backend/` |
-| **API_REFERENCE.md** | Endpoint quick reference | `/backend/` |
-| **README.md** | Quick start guide | `/backend/` |
+| **ARCHITECTURE_SUMMARY.md** | Complete system design | `/src/modules/module_f35/backend/` |
+| **M35_INTEGRATION_GUIDE.md** | Integration instructions | `/src/modules/module_f35/backend/` |
+| **API_REFERENCE.md** | Endpoint quick reference | `/src/modules/module_f35/backend/` |
+| **README.md** | Quick start guide | `/src/modules/module_f35/backend/` |
 
 ## API Endpoints (Quick Reference)
 
@@ -273,9 +240,9 @@ curl -X POST http://localhost:5000/api/m35/recommendation/send-to-dsl \
 
 | Issue | Solution |
 |-------|----------|
-| "Connection refused" | Ensure MongoDB is running: `mongod` |
-| "Port 5000 in use" | Change port in `.env` or kill process on 5000 |
-| "Health check fails" | Check MongoDB connection and `.env` settings |
+| "Connection refused" | Ensure the backend is running on port 5000 |
+| "Port 5000 in use" | Kill process on 5000 or start on a different port |
+| "Health check fails" | Check backend logs for errors |
 | "No data in dashboard" | Use test_api.py to ingest sample data |
 | "Metrics not showing" | Wait 1-2 seconds after ingestion, refresh page |
 

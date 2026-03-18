@@ -2,6 +2,7 @@
 import streamlit as st
 from components.sidebar import sidebar
 from components.charts import patient_line_chart, appointment_donut_chart
+from src.modules.module_f35 import render_module_f35
 
 # All categories and their modules
 CATEGORIES = {
@@ -133,6 +134,7 @@ def patient_dashboard():
     st.session_state.setdefault("view", "main")
     st.session_state.setdefault("selected_category", None)
     st.session_state.setdefault("selected_module", None)
+    st.session_state.setdefault("last_patient_sidebar_selection", "Dashboard")
 
     # Sidebar
     selected = sidebar([
@@ -146,21 +148,28 @@ def patient_dashboard():
         "G - Secure EHR & Access Control",
         "H - Laboratory Test Interpretation",
         "I - Integrated Capstone Projects"
-    ])
+    ], key="patient_sidebar_menu")
 
-    # Handle sidebar selection
-    if selected != "Dashboard" and selected in CATEGORIES:
-        st.session_state.selected_category = selected
-        st.session_state.view = "category"
-        st.session_state.selected_module = None
-    elif selected == "Dashboard":
-        st.session_state.view = "main"
-        st.session_state.selected_category = None
-        st.session_state.selected_module = None
+    # Handle sidebar selection only when the user actually changes it.
+    if selected != st.session_state.last_patient_sidebar_selection:
+        if selected != "Dashboard" and selected in CATEGORIES:
+            st.session_state.selected_category = selected
+            st.session_state.view = "category"
+            st.session_state.selected_module = None
+        elif selected == "Dashboard":
+            st.session_state.view = "main"
+            st.session_state.selected_category = None
+            st.session_state.selected_module = None
+        st.session_state.last_patient_sidebar_selection = selected
 
     # ROUTER
     if st.session_state.view == "category":
         show_category_view()
+    elif st.session_state.view == "module_f35":
+        render_module_f35()
+        if st.button("⬅ Back to Modules"):
+            st.session_state.view = "category"
+            st.rerun()
     elif st.session_state.view == "module":
         show_module_detail()
     else:
@@ -348,7 +357,10 @@ def show_category_view():
                 
                 if st.button("→", key=f"mod_{code}", use_container_width=True):
                     st.session_state.selected_module = module
-                    st.session_state.view = "module"
+                    if code == "F5":
+                        st.session_state.view = "module_f35"
+                    else:
+                        st.session_state.view = "module"
                     st.rerun()
                 st.markdown("---")
     

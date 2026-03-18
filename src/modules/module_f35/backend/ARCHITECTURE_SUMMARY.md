@@ -52,7 +52,7 @@ Module M35 (Therapy Effectiveness Dashboard) is the **Processing & Analysis Laye
                          ↓
 ┌────────────────────────────────────────────────────────────┐
 │ CORE DATABASE LAYER                                        │
-│ - MongoDB/PostgreSQL                                       │
+│ - In-memory store (API)                                    │
 │ - ACID Compliance                                         │
 └────────────────────────────────────────────────────────────┘
 ```
@@ -61,7 +61,7 @@ Module M35 (Therapy Effectiveness Dashboard) is the **Processing & Analysis Laye
 
 ## Implementation Components
 
-### 1. Backend API (`backend/api_m35.py`)
+### 1. Backend API (`src/modules/module_f35/backend/api_m35.py`)
 
 Flask-based REST API with 3 endpoint groups:
 
@@ -118,7 +118,7 @@ Streamlit app with tabs:
 - **Home**: Module objectives and overview
 - **ER Diagram**: Database schema visualization
 - **Tables**: Raw data display
-- **MongoDB Queries**: Query examples
+- **API Requests**: Example GET/POST flows
 - **Backend Logic**: Processing logic
 - **Output**: Aggregated metrics and analysis
 - **📤 Send to DSL** (NEW): Decision support integration
@@ -236,7 +236,7 @@ Combines clinical effectiveness and cost-effectiveness.
 
 ## Database Schema
 
-### Collections in MongoDB
+### In-memory Data Model
 
 #### Therapies
 ```json
@@ -307,19 +307,17 @@ Index: { therapy_id: 1 }
 
 ### Prerequisites
 - Python 3.8+
-- MongoDB running on `localhost:27017`
-- Flask and dependencies (see `backend/requirements.txt`)
+- Backend running on `http://localhost:5000`
+- Flask and dependencies (see `src/modules/module_f35/backend/requirements.txt`)
 
 ### Installation
 
 ```bash
 # 1. Install dependencies
-cd backend
+cd src/modules/module_f35/backend
 pip install -r requirements.txt
 
 # 2. Configure environment (.env file)
-MONGO_URI=mongodb://localhost:27017
-MONGO_DB=therapy_database
 M35_API_BASE_URL=http://localhost:5000
 
 # 3. Start backend
@@ -332,7 +330,7 @@ python api_m35.py
 
 ```bash
 # Run comprehensive API test
-python backend/test_api.py
+python src/modules/module_f35/backend/test_api.py
 
 # OR test individual endpoints
 curl http://localhost:5000/api/m35/health
@@ -345,7 +343,7 @@ curl http://localhost:5000/api/m35/therapy?limit=10
 
 ### Upstream (Collection Layer)
 - Receive POST requests with clinical data
-- Validate and store in MongoDB
+- Validate and store in memory
 - No direct database access to collection layer
 
 ### Downstream (Decision Support Layer)
@@ -359,7 +357,7 @@ curl http://localhost:5000/api/m35/therapy?limit=10
 ## Files Created
 
 ```
-backend/
+src/modules/module_f35/backend/
 ├── api_m35.py                      # Main Flask API (25+ endpoints)
 ├── requirements.txt                 # Python dependencies
 ├── M35_INTEGRATION_GUIDE.md         # Complete integration guide
@@ -380,7 +378,7 @@ src/modules/module_f35/
 ✅ **RESTful API**: 20+ endpoints with proper HTTP methods  
 ✅ **Error Handling**: Comprehensive error responses  
 ✅ **Metrics Calculation**: Automated benefit-risk analysis  
-✅ **Performance**: Indexed MongoDB queries  
+✅ **Performance**: Lightweight in-memory lookups  
 ✅ **Integration Ready**: Easy mapping to DSL modules  
 ✅ **Documentation**: API reference, integration guide, inline comments  
 ✅ **Testing Support**: Full test suite included  
@@ -389,8 +387,8 @@ src/modules/module_f35/
 
 ## Next Steps
 
-1. **Start Backend**: `python backend/api_m35.py`
-2. **Test APIs**: `python backend/test_api.py`
+1. **Start Backend**: `python src/modules/module_f35/backend/api_m35.py`
+2. **Test APIs**: `python src/modules/module_f35/backend/test_api.py`
 3. **Ingest Data**: Use POST endpoints to add therapy data
 4. **View Dashboard**: Open Streamlit app
 5. **Send to DSL**: Use "📤 Send to DSL" tab in dashboard

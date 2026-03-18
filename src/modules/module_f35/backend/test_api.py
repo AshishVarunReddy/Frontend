@@ -174,7 +174,7 @@ def run_full_test():
     # Health check
     if not test_health_check():
         print("\n❌ Backend is not responding. Ensure M35 backend is running on port 5000")
-        print("   Start with: python backend/api_m35.py")
+        print("   Start with: python src/modules/module_f35/backend/api_m35.py")
         return
     
     print("✅ Backend is healthy")
@@ -222,7 +222,7 @@ if __name__ == "__main__":
         print("\n❌ Cannot connect to M35 backend at http://localhost:5000")
         print("\nTo start the backend:")
         print("  1. Open PowerShell")
-        print("  2. Navigate to: C:\\Users\\prath\\OneDrive\\Desktop\\DBMS_PROJECT\\Frontend\\backend")
+        print("  2. Navigate to: C:\\Users\\prath\\OneDrive\\Desktop\\DBMS_PROJECT\\Frontend\\src\\modules\\module_f35\\backend")
         print("  3. Run: python api_m35.py")
         print("\nThen run this test script again.")
     except Exception as e:
