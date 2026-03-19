@@ -1,10 +1,15 @@
 from pathlib import Path
 import os
 import sys
+from typing import Any, Dict, List, Optional, Tuple
 
 import streamlit as st
-import streamlit.components.v1 as components
 from dotenv import load_dotenv
+
+try:
+    from pymongo import MongoClient
+except Exception:  # pragma: no cover - handled gracefully when package is absent
+    MongoClient = None
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 if str(PROJECT_ROOT) not in sys.path:
@@ -12,48 +17,102 @@ if str(PROJECT_ROOT) not in sys.path:
 
 load_dotenv(PROJECT_ROOT / ".env")
 MODULE_DIR = Path(__file__).resolve().parent
-ER_DIAGRAM_SVG_PATH = MODULE_DIR / "assets" / "m35_er_diagram.svg"
+ER_DIAGRAM_IMAGE_PATH = MODULE_DIR / "assets" / "erdiagimp.jpg"
+M35_MONGODB_URI = os.getenv("MONGO_DB_URI", os.getenv("M35_MONGODB_URI", os.getenv("MONGO_URI", "mongodb://localhost:27017")))
+M35_MONGODB_DB = os.getenv("M35_MONGODB_DB", os.getenv("MONGO_DB", "m35_therapy"))
 
-from components.tabs import module_tabs
-from src.modules.module_f35.api_client import get_api_client
+MOCK_THERAPIES = [
+    {
+        "therapy_id": "T001",
+        "name": "Chemo Regimen A",
+        "therapy_type": "Chemotherapy",
+        "start_date": "2026-01-10",
+        "end_date": "2026-03-10",
+        "cost_per_cycle": 12000,
+        "source_module": "M1",
+    },
+    {
+        "therapy_id": "T002",
+        "name": "Immunotherapy B",
+        "therapy_type": "Immunotherapy",
+        "start_date": "2026-02-01",
+        "end_date": "2026-05-15",
+        "cost_per_cycle": 18000,
+        "source_module": "M1",
+    },
+    {
+        "therapy_id": "T003",
+        "name": "Targeted Therapy C",
+        "therapy_type": "Targeted",
+        "start_date": "2026-01-20",
+        "end_date": "2026-04-20",
+        "cost_per_cycle": 15000,
+        "source_module": "M1",
+    },
+]
 
+MOCK_RESPONSES = [
+    {
+        "therapy_id": "T001",
+        "patient_id": "P120",
+        "clinical_improvement": 65,
+        "symptom_relief": 58,
+        "survival_days": 240,
+        "response_grade": "PR",
+        "source_module": "M2",
+    },
+    {
+        "therapy_id": "T002",
+        "patient_id": "P145",
+        "clinical_improvement": 74,
+        "symptom_relief": 68,
+        "survival_days": 310,
+        "response_grade": "CR",
+        "source_module": "M2",
+    },
+    {
+        "therapy_id": "T003",
+        "patient_id": "P181",
+        "clinical_improvement": 59,
+        "symptom_relief": 52,
+        "survival_days": 220,
+        "response_grade": "SD",
+        "source_module": "M2",
+    },
+]
 
-API_EXAMPLES = """
-POST /api/m35/ingest/therapy
-{
-  "name": "Chemo Regimen A",
-  "therapy_type": "Chemotherapy",
-  "start_date": "2026-01-10",
-  "end_date": "2026-03-10",
-  "cost_per_cycle": 12000,
-  "source_module": "M1"
-}
+MOCK_SIDE_EFFECTS = [
+    {
+        "therapy_id": "T001",
+        "patient_id": "P120",
+        "adverse_event": "Nausea",
+        "toxicity_grade": 2,
+        "tolerability": "Moderate",
+        "source_module": "M5",
+    },
+    {
+        "therapy_id": "T002",
+        "patient_id": "P145",
+        "adverse_event": "Fatigue",
+        "toxicity_grade": 1,
+        "tolerability": "High",
+        "source_module": "M5",
+    },
+    {
+        "therapy_id": "T003",
+        "patient_id": "P181",
+        "adverse_event": "Neuropathy",
+        "toxicity_grade": 3,
+        "tolerability": "Low",
+        "source_module": "M5",
+    },
+]
 
-POST /api/m35/ingest/response
-{
-  "therapy_id": "<therapy_id>",
-  "patient_id": "P120",
-  "clinical_improvement": 65,
-  "symptom_relief": 58,
-  "survival_days": 240,
-  "response_grade": "PR",
-  "source_module": "M2"
-}
-
-GET /api/m35/therapy?limit=10
-GET /api/m35/metrics/<therapy_id>
-""".strip()
-
-
-API_CONTRACT = {
-    "GET /api/therapy": "List therapies",
-    "GET /api/therapy/{therapy_id}": "Therapy details",
-    "GET /api/response?therapy_id=": "Responses by therapy",
-    "GET /api/side-effect?therapy_id=": "Side effects by therapy",
-    "GET /api/cost-analysis?therapy_id=": "Cost analysis by therapy",
-    "POST /api/response": "Add response record",
-    "POST /api/side-effect": "Add side effect record",
-}
+MOCK_COST_ANALYSIS = [
+    {"therapy_id": "T001", "cycles": 4, "total_cost": 48000, "qalys": 1.2, "source_module": "M25"},
+    {"therapy_id": "T002", "cycles": 4, "total_cost": 72000, "qalys": 1.8, "source_module": "M25"},
+    {"therapy_id": "T003", "cycles": 4, "total_cost": 60000, "qalys": 1.1, "source_module": "M25"},
+]
 
 
 def _mean(values):
@@ -62,38 +121,68 @@ def _mean(values):
     return sum(values) / len(values)
 
 
-def _fetch_backend_data():
-    """
-    Fetch data from M35 API Backend instead of direct database access
-    Data flows from: Collection Layer → M35 Backend → Frontend
-    """
+def _seed_mock_data_if_empty(db):
+    """Seed MongoDB collections once when empty so the dashboard always has demo data."""
+    if db.therapies.count_documents({}) == 0:
+        db.therapies.insert_many(MOCK_THERAPIES)
+    if db.responses.count_documents({}) == 0:
+        db.responses.insert_many(MOCK_RESPONSES)
+    if db.side_effects.count_documents({}) == 0:
+        db.side_effects.insert_many(MOCK_SIDE_EFFECTS)
+    if db.cost_analysis.count_documents({}) == 0:
+        db.cost_analysis.insert_many(MOCK_COST_ANALYSIS)
+
+
+def _prepare_docs(documents: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    prepared = []
+    for doc in documents:
+        cleaned = dict(doc)
+        if "_id" in cleaned:
+            cleaned["_id"] = str(cleaned["_id"])
+        prepared.append(cleaned)
+    return prepared
+
+
+def _fetch_mongodb_data() -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], List[Dict[str, Any]], List[Dict[str, Any]], Optional[str], str]:
+    """Fetch M35 data from MongoDB and fall back to in-memory mock data if unavailable."""
+    if MongoClient is None:
+        return (
+            list(MOCK_THERAPIES),
+            list(MOCK_RESPONSES),
+            list(MOCK_SIDE_EFFECTS),
+            list(MOCK_COST_ANALYSIS),
+            "pymongo is not installed. Showing local mock data.",
+            "Mock Data",
+        )
+
     try:
-        api_client = get_api_client(os.getenv("M35_API_BASE_URL", "http://localhost:5000"))
-        
-        # Check if backend is healthy
-        if not api_client.health_check():
-            return [], [], [], [], "Backend API not responding. Ensure M35 backend is running on port 5000"
-        
-        # Fetch data from M35 API endpoints
-        therapies = api_client.get_therapies(limit=1000)
-        responses = api_client.get_responses(limit=5000)
-        side_effects = api_client.get_side_effects(limit=5000)
-        
-        # Note: cost_analysis comes from responses if available
-        cost_analysis = []
-        
-        return therapies, responses, side_effects, cost_analysis, None
+        client = MongoClient(M35_MONGODB_URI, serverSelectionTimeoutMS=1500)
+        client.admin.command("ping")
+        db = client[M35_MONGODB_DB]
+        _seed_mock_data_if_empty(db)
+
+        therapies = _prepare_docs(list(db.therapies.find({})))
+        responses = _prepare_docs(list(db.responses.find({})))
+        side_effects = _prepare_docs(list(db.side_effects.find({})))
+        cost_analysis = _prepare_docs(list(db.cost_analysis.find({})))
+        return therapies, responses, side_effects, cost_analysis, None, "MongoDB"
     except Exception as exc:
-        return [], [], [], [], f"Failed to fetch data from M35 Backend: {str(exc)}"
+        return (
+            list(MOCK_THERAPIES),
+            list(MOCK_RESPONSES),
+            list(MOCK_SIDE_EFFECTS),
+            list(MOCK_COST_ANALYSIS),
+            f"MongoDB unavailable ({str(exc)}). Showing local mock data.",
+            "Mock Data",
+        )
 
 
 def _aggregate_metrics(therapies, responses, side_effects, cost_analysis):
     """
-    Aggregate metrics from API data
+    Aggregate metrics from MongoDB data
     Sends aggregated insights to Decision Support Layer (M13-M24)
     """
     metrics = []
-    api_client = get_api_client(os.getenv("M35_API_BASE_URL", "http://localhost:5000"))
 
     for therapy in therapies:
         therapy_id = therapy.get("_id") or therapy.get("therapy_id")
@@ -110,14 +199,14 @@ def _aggregate_metrics(therapies, responses, side_effects, cost_analysis):
         benefit_score = (avg_improvement + avg_symptom_relief + (avg_survival_days / 365) * 100) / 3
         benefit_risk_index = benefit_score / (1 + avg_toxicity)
 
-        # Try to get cost_per_qaly from API metrics endpoint
+        # Compute cost_per_qaly directly from MongoDB cost_analysis collection data.
         cost_per_qaly = None
-        try:
-            metrics_data = api_client.get_metrics(str(therapy_id))
-            if metrics_data:
-                cost_per_qaly = metrics_data.get("cost_per_qaly")
-        except:
-            pass
+        cost_records = [c for c in cost_analysis if c.get("therapy_id") == therapy_id]
+        if cost_records:
+            total_cost = _mean([c.get("total_cost", 0) for c in cost_records])
+            qalys = _mean([c.get("qalys", 0) for c in cost_records])
+            if qalys:
+                cost_per_qaly = total_cost / qalys
 
         metrics.append(
             {
@@ -137,37 +226,38 @@ def _aggregate_metrics(therapies, responses, side_effects, cost_analysis):
 
 
 def _render_er_diagram_image():
-        """Render ER diagram from module-local asset file."""
-        if not ER_DIAGRAM_SVG_PATH.exists():
-                st.error(f"ER diagram asset not found: {ER_DIAGRAM_SVG_PATH}")
-                return
+    """Render ER diagram from module-local asset file."""
+    if not ER_DIAGRAM_IMAGE_PATH.exists():
+        st.error(f"ER diagram asset not found: {ER_DIAGRAM_IMAGE_PATH}")
+        return
 
-        er_svg = ER_DIAGRAM_SVG_PATH.read_text(encoding="utf-8")
-        components.html(er_svg, height=720, scrolling=True)
+    st.image(str(ER_DIAGRAM_IMAGE_PATH), use_container_width=True)
 
 
 def render_module_f35():
     st.markdown("## Module 35: Therapy Effectiveness Evaluation System")
     st.caption("Category F - Case-Based Decision Support")
 
-    therapies, responses, side_effects, cost_analysis, db_error = _fetch_backend_data()
+    therapies, responses, side_effects, cost_analysis, db_error, data_source = _fetch_mongodb_data()
 
     tab = st.radio(
         "",
-        ["Home", "ER Diagram", "Tables", "API Requests", "Backend Logic", "Output", "📤 Send to DSL"],
+        ["Home", "ER Diagram", "Tables", "MongoDB", "Backend Logic", "Output", "📤 Send to DSL"],
         horizontal=True,
     )
     st.divider()
 
     if db_error:
-        st.error(db_error)
+        st.warning(db_error)
+
+    st.caption(f"Data Source: {data_source}")
 
     if tab == "Home":
         st.markdown("### Objectives")
         st.write("Design a therapy response measurement system with benefit and risk tracking.")
 
         st.markdown("### Backend Scope")
-        st.write("Defines schema and API contract for therapy effectiveness data.")
+        st.write("Defines MongoDB collections and analytics logic for therapy effectiveness data.")
 
         col1, col2 = st.columns(2)
         with col1:
@@ -194,7 +284,7 @@ def render_module_f35():
 
     elif tab == "Tables":
         if not therapies and not responses and not side_effects and not cost_analysis:
-            st.info("No data returned from the API yet.")
+            st.info("No data available from MongoDB yet.")
         st.markdown("### Therapy")
         st.table(therapies)
 
@@ -207,30 +297,32 @@ def render_module_f35():
         st.markdown("### CostAnalysis")
         st.table(cost_analysis)
 
-    elif tab == "API Requests":
-        st.markdown("### API Contract")
-        st.json(API_CONTRACT)
-
-        st.markdown("### Example API Requests")
-        st.code(
-            API_EXAMPLES,
-            language="json",
-        )
+    elif tab == "MongoDB":
+        st.markdown("### MongoDB Configuration")
+        st.json({
+            "database": M35_MONGODB_DB,
+            "collections": ["therapies", "responses", "side_effects", "cost_analysis"],
+        })
+        st.markdown("### Notes")
+        st.write("This dashboard now reads directly from MongoDB. If MongoDB is offline, local mock data is shown so development can continue.")
+        st.write("Later, this can be switched back to API mode by replacing _fetch_mongodb_data with API client calls.")
 
     elif tab == "Backend Logic":
-        st.markdown("### Backend Logic (REST API)")
+        st.markdown("### Backend Logic (MongoDB)")
         st.code(
             """
-POST /api/m35/ingest/therapy     -> store therapy metadata
-POST /api/m35/ingest/response    -> store outcomes and symptoms
-POST /api/m35/ingest/side-effect -> store adverse events
-POST /api/m35/ingest/cost-analysis -> store costs + QALY
+MongoDB collections:
+    therapies
+    responses
+    side_effects
+    cost_analysis
 
-GET /api/m35/metrics/<therapy_id>
-    -> aggregates benefit, risk, and cost per QALY
-
-GET /api/m35/recommendation
-    -> ranks therapies for decision support modules
+Startup flow:
+    1) Connect to MongoDB
+    2) Seed mock records when collections are empty
+    3) Read collection documents
+    4) Aggregate benefit-risk and cost metrics in dashboard
+    5) Rank recommendations for decision support modules
 """.strip(),
             language="text",
         )
@@ -238,7 +330,7 @@ GET /api/m35/recommendation
     elif tab == "Output":
         st.markdown("### Benefit and Risk Summary")
         if not therapies:
-            st.info("Summary metrics will appear after backend data is available.")
+            st.info("Summary metrics will appear after MongoDB data is available.")
         metrics = _aggregate_metrics(therapies, responses, side_effects, cost_analysis)
 
         top_col1, top_col2, top_col3 = st.columns(3)
@@ -266,26 +358,22 @@ GET /api/m35/recommendation
 
     elif tab == "📤 Send to DSL":
         st.markdown("### Therapy Recommendations → Decision Support Layer (M13-M24)")
-        st.info("This tab sends M35 recommendations to the Decision Support Layer for clinical decision making")
-        
-        api_client = get_api_client(os.getenv("M35_API_BASE_URL", "http://localhost:5000"))
-        recommendations = api_client.get_recommendations(limit=10)
+        st.info("This tab currently simulates sending recommendations from MongoDB-derived metrics. API integration can be re-enabled later.")
+        metrics = _aggregate_metrics(therapies, responses, side_effects, cost_analysis)
+        recommendations = sorted(metrics, key=lambda m: m.get("benefit_risk_index", 0), reverse=True)[:10]
         
         if not recommendations:
-            st.warning("No recommendations available. Ensure M35 backend is running and has data.")
+            st.warning("No recommendations available. Ensure MongoDB has data.")
         else:
             st.markdown("#### Top Therapy Recommendations")
             
-            # Display as table
             rec_data = []
             for rec in recommendations:
                 rec_data.append({
                     "Therapy": rec.get("name", "Unknown"),
-                    "Type": rec.get("therapy_type", "N/A"),
                     "Benefit-Risk Index": rec.get("benefit_risk_index", 0),
                     "Cost/QALY": f"${rec.get('cost_per_qaly', 0):.2f}" if rec.get('cost_per_qaly') else "N/A",
-                    "Rank Score": rec.get("rank_score", 0),
-                    "Responses": rec.get("response_count", 0)
+                    "Responses": rec.get("adverse_events", 0),
                 })
             
             st.dataframe(rec_data, use_container_width=True)
@@ -311,23 +399,19 @@ GET /api/m35/recommendation
             
             if st.button("🚀 Send Recommendations to Decision Support Layer", use_container_width=True):
                 if recommendations:
-                    # Send each recommendation to DSL
-                    success_count = 0
-                    for rec in recommendations[:3]:  # Send top 3 recommendations
-                        response = api_client.send_recommendation_to_dsl(
-                            recommendation_data=rec,
-                            target_dsl_module=target_module,
-                            patient_id=patient_id or "GENERAL",
-                            urgency=urgency
-                        )
-                        if response.get("status") == "success":
-                            success_count += 1
-                    
-                    if success_count > 0:
-                        st.success(f"✅ Sent {success_count} recommendations to Decision Support Layer ({target_module})")
-                        st.json({"status": "success", "count": success_count, "target": target_module})
-                    else:
-                        st.error("Failed to send recommendations. Ensure M35 backend is running.")
+                    payload = {
+                        "status": "simulated",
+                        "target_module": target_module,
+                        "urgency": urgency,
+                        "patient_id": patient_id or "GENERAL",
+                        "recommendation_count": min(3, len(recommendations)),
+                        "top_recommendations": recommendations[:3],
+                    }
+                    st.success(
+                        f"Prepared {payload['recommendation_count']} recommendations for {target_module}. "
+                        "API handoff is disabled in mock mode."
+                    )
+                    st.json(payload)
             
             st.markdown("---")
             st.markdown("#### Data Flow Architecture")
