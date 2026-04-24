@@ -4,10 +4,12 @@ Category F – Case-Based Decision Support
 
 Data flow:
   Collection Layer (M1 → therapies, M2 → responses, M5 → side effects, M25 → cost)
-      ↓  POST  (ingestion endpoints)
-  M35 Flask Backend  (http://localhost:5000)
-      ↓  GET   (retrieval / analysis endpoints)
+      ↓  direct PyMongo writes
+  MongoDB Atlas  (therapy_database)
+      ↓  direct PyMongo reads
   This Streamlit dashboard  →  Decision Support Layer (M13-M24)
+
+No Flask backend required — all DB operations go through db_client.py.
 """
 
 import os
@@ -25,73 +27,33 @@ if str(PROJECT_ROOT) not in sys.path:
 
 load_dotenv(PROJECT_ROOT / ".env")
 
-MODULE_DIR           = Path(__file__).resolve().parent
-ER_DIAGRAM_IMAGE_PATH= MODULE_DIR / "assets" / "erdiagimp.jpg"
-M35_API_BASE_URL     = os.getenv("M35_API_BASE_URL", "http://localhost:5000")
+MODULE_DIR            = Path(__file__).resolve().parent
+ER_DIAGRAM_IMAGE_PATH = MODULE_DIR / "assets" / "erdiagimp.jpg"
 
-# ---- Local mock fallback (shown when Flask API is offline) ------------------
-MOCK_THERAPIES = [
-    {"_id": "T001", "therapy_id": "T001", "name": "Chemo Regimen A",    "therapy_type": "Chemotherapy",  "start_date": "2026-01-10", "end_date": "2026-03-10", "cost_per_cycle": 12000, "source_module": "M1"},
-    {"_id": "T002", "therapy_id": "T002", "name": "Immunotherapy B",    "therapy_type": "Immunotherapy", "start_date": "2026-02-01", "end_date": "2026-05-15", "cost_per_cycle": 18000, "source_module": "M1"},
-    {"_id": "T003", "therapy_id": "T003", "name": "Targeted Therapy C", "therapy_type": "Targeted",       "start_date": "2026-01-20", "end_date": "2026-04-20", "cost_per_cycle": 15000, "source_module": "M1"},
-]
-MOCK_RESPONSES = [
-    {"therapy_id": "T001", "patient_id": "P120", "clinical_improvement": 65, "symptom_relief": 58, "survival_days": 240, "response_grade": "PR",  "source_module": "M2"},
-    {"therapy_id": "T002", "patient_id": "P145", "clinical_improvement": 74, "symptom_relief": 68, "survival_days": 310, "response_grade": "CR",  "source_module": "M2"},
-    {"therapy_id": "T003", "patient_id": "P181", "clinical_improvement": 59, "symptom_relief": 52, "survival_days": 220, "response_grade": "SD",  "source_module": "M2"},
-]
-MOCK_SIDE_EFFECTS = [
-    {"therapy_id": "T001", "patient_id": "P120", "adverse_event": "Nausea",     "toxicity_grade": 2, "tolerability": "Moderate", "source_module": "M5"},
-    {"therapy_id": "T002", "patient_id": "P145", "adverse_event": "Fatigue",    "toxicity_grade": 1, "tolerability": "High",     "source_module": "M5"},
-    {"therapy_id": "T003", "patient_id": "P181", "adverse_event": "Neuropathy", "toxicity_grade": 3, "tolerability": "Low",      "source_module": "M5"},
-]
-MOCK_COST_ANALYSIS = [
-    {"therapy_id": "T001", "cycles": 4, "total_cost": 48000, "qalys": 1.2, "source_module": "M25"},
-    {"therapy_id": "T002", "cycles": 4, "total_cost": 72000, "qalys": 1.8, "source_module": "M25"},
-    {"therapy_id": "T003", "cycles": 4, "total_cost": 60000, "qalys": 1.1, "source_module": "M25"},
-]
+# ---- Direct DB client (replaces Flask API) ----------------------------------
+from src.modules.module_f35 import db_client
+
+# Seed data on first import
+db_client._seed_if_empty()
 
 
-# ---- API client helpers -------------------------------------------------------
-
-def _client():
-    """Return cached M35APIClient."""
-    from src.modules.module_f35.api_client import get_api_client
-    return get_api_client(M35_API_BASE_URL)
-
-
-def _api_online() -> bool:
-    try:
-        return _client().health_check()
-    except Exception:
-        return False
-
+# ---- Fetch helpers -----------------------------------------------------------
 
 def _fetch_all_data() -> Tuple[List, List, List, List, Optional[str], str]:
     """
-    Fetch all four collections via GET API calls.
-    Falls back to local mock data if the backend is offline.
+    Fetch all four collections directly from MongoDB (or in-memory fallback).
     """
     try:
-        c = _client()
-        if not c.health_check():
-            raise ConnectionError("Backend health check failed")
-
-        therapies    = c.get_therapies(limit=500)
-        responses    = c.get_responses(limit=500)
-        side_effects = c.get_side_effects(limit=500)
-        cost_analysis= c.get_cost_analysis(limit=500)
-        return therapies, responses, side_effects, cost_analysis, None, "API ✅"
+        therapies     = db_client.get_therapies(limit=500)
+        responses     = db_client.get_responses(limit=500)
+        side_effects  = db_client.get_side_effects(limit=500)
+        cost_analysis = db_client.get_cost_analysis(limit=500)
+        return therapies, responses, side_effects, cost_analysis, None, db_client.storage_label()
     except Exception as exc:
-        return (
-            list(MOCK_THERAPIES), list(MOCK_RESPONSES),
-            list(MOCK_SIDE_EFFECTS), list(MOCK_COST_ANALYSIS),
-            f"Backend offline ({exc}). Showing local mock data.",
-            "Mock (offline)",
-        )
+        return [], [], [], [], f"Error loading data: {exc}", "Error"
 
 
-# ---- Metric computation (used when API metrics endpoint isn't available) ----
+# ---- Metric computation -----------------------------------------------------
 
 def _mean(values: list) -> float:
     return sum(values) / len(values) if values else 0.0
@@ -152,20 +114,20 @@ def render_module_f35():
     st.markdown("## 🧬 Module F35: Therapy Effectiveness Evaluation System")
     st.caption("Category F – Case-Based Clinical Decision Support")
 
-    # ---- Backend status banner ----------------------------------------------
-    online = _api_online()
-    if online:
-        st.success(f"✅ Backend API online — `{M35_API_BASE_URL}`", icon="🟢")
+    # ---- Storage status banner -----------------------------------------------
+    connected = db_client.is_connected()
+    if connected:
+        st.success(f"✅ Connected directly to MongoDB Atlas — `{db_client.MONGO_DB}`", icon="🟢")
     else:
         st.warning(
-            f"⚠️ Backend API offline (`{M35_API_BASE_URL}`). "
-            "Showing local mock data.  Run `python src/modules/module_f35/backend/api_m35.py` to start it.",
+            "⚠️ MongoDB unavailable. Using in-memory fallback data. "
+            "Set MONGO_URI in your .env or Streamlit secrets to connect.",
             icon="🔴",
         )
 
-    # ---- Fetch data (once per tab render, cached in session state) ----------
+    # ---- Fetch data ----------------------------------------------------------
     therapies, responses, side_effects, cost_analysis, db_error, data_source = _fetch_all_data()
-    if db_error and online:          # only show DB-level error if API was thought to be online
+    if db_error:
         st.warning(db_error)
     st.caption(f"Data source: **{data_source}**")
 
@@ -191,22 +153,20 @@ def render_module_f35():
 
         st.markdown("### Data Flow Architecture")
         st.code("""
-Collection Layer  (POST endpoints → M35)
-  ├─ M1  Patient Demographics    → POST /api/m35/ingest/therapy
-  ├─ M2  Chronic Disease Records → POST /api/m35/ingest/response
-  ├─ M5  Allergy & Immunization  → POST /api/m35/ingest/side-effect
-  └─ M25 Cost / Billing          → POST /api/m35/ingest/cost-analysis
+Collection Layer  (direct MongoDB writes)
+  ├─ M1  Patient Demographics    → therapies collection
+  ├─ M2  Chronic Disease Records → responses collection
+  ├─ M5  Allergy & Immunization  → side_effects collection
+  └─ M25 Cost / Billing          → cost_analysis collection
 
-M35 Processing Layer  (GET endpoints)
-  ├─ GET /api/m35/therapy
-  ├─ GET /api/m35/response
-  ├─ GET /api/m35/side-effect
-  ├─ GET /api/m35/cost-analysis
-  └─ GET /api/m35/metrics/{therapy_id}
+M35 Processing Layer  (direct MongoDB reads)
+  ├─ therapies     → benefit-risk analysis
+  ├─ responses     → clinical improvement metrics
+  ├─ side_effects  → safety / tolerability scoring
+  └─ cost_analysis → cost-effectiveness (QALY)
 
 Decision Support Layer  (M13-M24)
-  ├─ GET  /api/m35/recommendation
-  └─ POST /api/m35/recommendation/send-to-dsl
+  └─ Ranked recommendations dispatched downstream
         """, language="text")
 
         col1, col2 = st.columns(2)
@@ -232,145 +192,140 @@ Decision Support Layer  (M13-M24)
         _render_er_diagram()
 
     # =========================================================================
-    # INGEST DATA  (POST from upstream modules)
+    # INGEST DATA  (direct writes from upstream modules)
     # =========================================================================
     elif tab == "📥 Ingest Data":
         st.markdown("### Ingest Data from Upstream Modules")
         st.info(
             "Use this tab to simulate upstream Collection Layer modules "
-            "**POST**-ing raw clinical data to M35 via the REST API.",
+            "writing raw clinical data directly to the MongoDB collections.",
             icon="ℹ️",
         )
 
-        if not online:
-            st.error("Backend must be running to ingest data. Start the Flask API first.")
-        else:
-            source = st.selectbox(
-                "Select source module",
-                ["M1 – Patient Demographics (Therapy)", "M2 – Chronic Disease Records (Response)",
-                 "M5 – Allergy & Immunization (Side Effect)", "M25 – Cost / Billing (Cost Analysis)"],
-            )
+        source = st.selectbox(
+            "Select source module",
+            ["M1 – Patient Demographics (Therapy)", "M2 – Chronic Disease Records (Response)",
+             "M5 – Allergy & Immunization (Side Effect)", "M25 – Cost / Billing (Cost Analysis)"],
+        )
 
-            c = _client()
+        # ---- Therapy (M1) ---------------------------------------------------
+        if source.startswith("M1"):
+            st.markdown("#### Insert Therapy Data → `therapies` collection")
+            with st.form("form_therapy"):
+                col1, col2 = st.columns(2)
+                name          = col1.text_input("Therapy Name", "Chemo Regimen X")
+                therapy_type  = col2.selectbox("Therapy Type",
+                                               ["Chemotherapy", "Immunotherapy", "Targeted", "Radiation", "Hormonal"])
+                start_date    = col1.text_input("Start Date (YYYY-MM-DD)", "2026-01-01")
+                end_date      = col2.text_input("End Date   (YYYY-MM-DD)", "2026-04-01")
+                cost_per_cycle= st.number_input("Cost per Cycle ($)", min_value=0.0, value=10000.0, step=500.0)
+                submitted     = st.form_submit_button("📤 Insert Therapy (from M1)")
 
-            # ---- Therapy (M1) -----------------------------------------------
-            if source.startswith("M1"):
-                st.markdown("#### POST Therapy Data → `/api/m35/ingest/therapy`")
-                with st.form("form_therapy"):
-                    col1, col2 = st.columns(2)
-                    name          = col1.text_input("Therapy Name", "Chemo Regimen X")
-                    therapy_type  = col2.selectbox("Therapy Type",
-                                                   ["Chemotherapy", "Immunotherapy", "Targeted", "Radiation", "Hormonal"])
-                    start_date    = col1.text_input("Start Date (YYYY-MM-DD)", "2026-01-01")
-                    end_date      = col2.text_input("End Date   (YYYY-MM-DD)", "2026-04-01")
-                    cost_per_cycle= st.number_input("Cost per Cycle ($)", min_value=0.0, value=10000.0, step=500.0)
-                    submitted     = st.form_submit_button("📤 POST Therapy (from M1)")
+            if submitted:
+                with st.spinner("Writing to database…"):
+                    result = db_client.ingest_therapy(name, therapy_type, start_date, end_date, cost_per_cycle, "M1")
+                if result.get("status") == "success":
+                    st.success(f"✅ Therapy created — ID: `{result.get('therapy_id')}`")
+                    st.json(result)
+                else:
+                    st.error(f"❌ Error: {result.get('message')}")
 
-                if submitted:
-                    with st.spinner("Sending POST request…"):
-                        result = c.ingest_therapy(name, therapy_type, start_date, end_date, cost_per_cycle, "M1")
-                    if result.get("status") == "success":
-                        st.success(f"✅ Therapy created — ID: `{result.get('therapy_id')}`")
-                        st.json(result)
-                    else:
-                        st.error(f"❌ Error: {result.get('message')}")
+        # ---- Response (M2) --------------------------------------------------
+        elif source.startswith("M2"):
+            st.markdown("#### Insert Patient Response → `responses` collection")
+            therapy_list = db_client.get_therapies(limit=100)
+            therapy_opts = {t.get("name", t.get("_id")): t.get("_id") or t.get("therapy_id") for t in therapy_list}
 
-            # ---- Response (M2) ----------------------------------------------
-            elif source.startswith("M2"):
-                st.markdown("#### POST Patient Response → `/api/m35/ingest/response`")
-                therapy_list = _client().get_therapies(limit=100)
-                therapy_opts = {t.get("name", t.get("_id")): t.get("_id") or t.get("therapy_id") for t in therapy_list}
+            with st.form("form_response"):
+                selected_therapy   = st.selectbox("Select Therapy", list(therapy_opts.keys()))
+                col1, col2         = st.columns(2)
+                patient_id         = col1.text_input("Patient ID", "P200")
+                response_grade     = col2.selectbox("Response Grade", ["CR", "PR", "SD", "PD"])
+                clinical_improvement = col1.slider("Clinical Improvement (%)", 0, 100, 60)
+                symptom_relief       = col2.slider("Symptom Relief (%)",       0, 100, 55)
+                survival_days        = st.number_input("Survival Days", min_value=0, value=300, step=10)
+                submitted            = st.form_submit_button("📤 Insert Response (from M2)")
 
-                with st.form("form_response"):
-                    selected_therapy   = st.selectbox("Select Therapy", list(therapy_opts.keys()))
-                    col1, col2         = st.columns(2)
-                    patient_id         = col1.text_input("Patient ID", "P200")
-                    response_grade     = col2.selectbox("Response Grade", ["CR", "PR", "SD", "PD"])
-                    clinical_improvement = col1.slider("Clinical Improvement (%)", 0, 100, 60)
-                    symptom_relief       = col2.slider("Symptom Relief (%)",       0, 100, 55)
-                    survival_days        = st.number_input("Survival Days", min_value=0, value=300, step=10)
-                    submitted            = st.form_submit_button("📤 POST Response (from M2)")
+            if submitted:
+                tid = therapy_opts[selected_therapy]
+                with st.spinner("Writing to database…"):
+                    result = db_client.ingest_response(tid, patient_id, clinical_improvement,
+                                                       symptom_relief, int(survival_days), response_grade, "M2")
+                if result.get("status") == "success":
+                    st.success(f"✅ Response recorded — ID: `{result.get('response_id')}`")
+                    st.json(result)
+                else:
+                    st.error(f"❌ Error: {result.get('message')}")
 
-                if submitted:
-                    tid = therapy_opts[selected_therapy]
-                    with st.spinner("Sending POST request…"):
-                        result = c.ingest_response(tid, patient_id, clinical_improvement,
-                                                   symptom_relief, int(survival_days), response_grade, "M2")
-                    if result.get("status") == "success":
-                        st.success(f"✅ Response recorded — ID: `{result.get('response_id')}`")
-                        st.json(result)
-                    else:
-                        st.error(f"❌ Error: {result.get('message')}")
+        # ---- Side Effect (M5) -----------------------------------------------
+        elif source.startswith("M5"):
+            st.markdown("#### Insert Side Effect → `side_effects` collection")
+            therapy_list = db_client.get_therapies(limit=100)
+            therapy_opts = {t.get("name", t.get("_id")): t.get("_id") or t.get("therapy_id") for t in therapy_list}
 
-            # ---- Side Effect (M5) -------------------------------------------
-            elif source.startswith("M5"):
-                st.markdown("#### POST Side Effect → `/api/m35/ingest/side-effect`")
-                therapy_list = _client().get_therapies(limit=100)
-                therapy_opts = {t.get("name", t.get("_id")): t.get("_id") or t.get("therapy_id") for t in therapy_list}
+            with st.form("form_side_effect"):
+                selected_therapy = st.selectbox("Select Therapy", list(therapy_opts.keys()))
+                col1, col2       = st.columns(2)
+                patient_id       = col1.text_input("Patient ID", "P200")
+                adverse_event    = col2.text_input("Adverse Event", "Nausea")
+                toxicity_grade   = col1.slider("Toxicity Grade (0–5)", 0, 5, 2)
+                tolerability     = col2.selectbox("Tolerability", ["High", "Moderate", "Low"])
+                submitted        = st.form_submit_button("📤 Insert Side Effect (from M5)")
 
-                with st.form("form_side_effect"):
-                    selected_therapy = st.selectbox("Select Therapy", list(therapy_opts.keys()))
-                    col1, col2       = st.columns(2)
-                    patient_id       = col1.text_input("Patient ID", "P200")
-                    adverse_event    = col2.text_input("Adverse Event", "Nausea")
-                    toxicity_grade   = col1.slider("Toxicity Grade (0–5)", 0, 5, 2)
-                    tolerability     = col2.selectbox("Tolerability", ["High", "Moderate", "Low"])
-                    submitted        = st.form_submit_button("📤 POST Side Effect (from M5)")
+            if submitted:
+                tid = therapy_opts[selected_therapy]
+                with st.spinner("Writing to database…"):
+                    result = db_client.ingest_side_effect(tid, patient_id, adverse_event,
+                                                          toxicity_grade, tolerability, "M5")
+                if result.get("status") == "success":
+                    st.success(f"✅ Side effect recorded — ID: `{result.get('side_effect_id')}`")
+                    st.json(result)
+                else:
+                    st.error(f"❌ Error: {result.get('message')}")
 
-                if submitted:
-                    tid = therapy_opts[selected_therapy]
-                    with st.spinner("Sending POST request…"):
-                        result = c.ingest_side_effect(tid, patient_id, adverse_event,
-                                                      toxicity_grade, tolerability, "M5")
-                    if result.get("status") == "success":
-                        st.success(f"✅ Side effect recorded — ID: `{result.get('side_effect_id')}`")
-                        st.json(result)
-                    else:
-                        st.error(f"❌ Error: {result.get('message')}")
+        # ---- Cost Analysis (M25) --------------------------------------------
+        elif source.startswith("M25"):
+            st.markdown("#### Insert Cost Analysis → `cost_analysis` collection")
+            therapy_list = db_client.get_therapies(limit=100)
+            therapy_opts = {t.get("name", t.get("_id")): t.get("_id") or t.get("therapy_id") for t in therapy_list}
 
-            # ---- Cost Analysis (M25) ----------------------------------------
-            elif source.startswith("M25"):
-                st.markdown("#### POST Cost Analysis → `/api/m35/ingest/cost-analysis`")
-                therapy_list = _client().get_therapies(limit=100)
-                therapy_opts = {t.get("name", t.get("_id")): t.get("_id") or t.get("therapy_id") for t in therapy_list}
+            with st.form("form_cost"):
+                selected_therapy = st.selectbox("Select Therapy", list(therapy_opts.keys()))
+                col1, col2       = st.columns(2)
+                cycles           = col1.number_input("Cycles Completed", min_value=1, value=4)
+                total_cost       = col2.number_input("Total Cost ($)", min_value=0.0, value=50000.0, step=1000.0)
+                qalys            = st.number_input("QALYs (Quality-Adjusted Life Years)", min_value=0.0, value=1.2, step=0.1)
+                submitted        = st.form_submit_button("📤 Insert Cost Analysis (from M25)")
 
-                with st.form("form_cost"):
-                    selected_therapy = st.selectbox("Select Therapy", list(therapy_opts.keys()))
-                    col1, col2       = st.columns(2)
-                    cycles           = col1.number_input("Cycles Completed", min_value=1, value=4)
-                    total_cost       = col2.number_input("Total Cost ($)", min_value=0.0, value=50000.0, step=1000.0)
-                    qalys            = st.number_input("QALYs (Quality-Adjusted Life Years)", min_value=0.0, value=1.2, step=0.1)
-                    submitted        = st.form_submit_button("📤 POST Cost Analysis (from M25)")
-
-                if submitted:
-                    tid = therapy_opts[selected_therapy]
-                    with st.spinner("Sending POST request…"):
-                        result = c.ingest_cost_analysis(tid, int(cycles), total_cost, qalys, "M25")
-                    if result.get("status") == "success":
-                        st.success(f"✅ Cost analysis recorded — ID: `{result.get('cost_analysis_id')}`")
-                        st.json(result)
-                    else:
-                        st.error(f"❌ Error: {result.get('message')}")
+            if submitted:
+                tid = therapy_opts[selected_therapy]
+                with st.spinner("Writing to database…"):
+                    result = db_client.ingest_cost_analysis(tid, int(cycles), total_cost, qalys, "M25")
+                if result.get("status") == "success":
+                    st.success(f"✅ Cost analysis recorded — ID: `{result.get('cost_analysis_id')}`")
+                    st.json(result)
+                else:
+                    st.error(f"❌ Error: {result.get('message')}")
 
     # =========================================================================
-    # TABLES  (GET all collections)
+    # TABLES  (all collections)
     # =========================================================================
     elif tab == "📋 Tables":
-        st.markdown("### Data retrieved via GET APIs")
+        st.markdown("### Data from MongoDB Collections")
 
-        st.markdown(f"#### Therapies — `GET {M35_API_BASE_URL}/api/m35/therapy`")
+        st.markdown("#### Therapies — `therapies` collection")
         st.caption(f"{len(therapies)} record(s)")
         st.dataframe(therapies, use_container_width=True)
 
-        st.markdown(f"#### Patient Responses — `GET {M35_API_BASE_URL}/api/m35/response`")
+        st.markdown("#### Patient Responses — `responses` collection")
         st.caption(f"{len(responses)} record(s)")
         st.dataframe(responses, use_container_width=True)
 
-        st.markdown(f"#### Side Effects — `GET {M35_API_BASE_URL}/api/m35/side-effect`")
+        st.markdown("#### Side Effects — `side_effects` collection")
         st.caption(f"{len(side_effects)} record(s)")
         st.dataframe(side_effects, use_container_width=True)
 
-        st.markdown(f"#### Cost Analysis — `GET {M35_API_BASE_URL}/api/m35/cost-analysis`")
+        st.markdown("#### Cost Analysis — `cost_analysis` collection")
         st.caption(f"{len(cost_analysis)} record(s)")
         st.dataframe(cost_analysis, use_container_width=True)
 
@@ -381,17 +336,17 @@ Decision Support Layer  (M13-M24)
         st.markdown("### Backend Logic — M35 Processing Layer")
         st.code("""
 Startup
-  1. Connect to MongoDB Atlas (MONGO_URI from .env)
+  1. Connect to MongoDB Atlas (MONGO_URI from .env / Streamlit secrets)
   2. Seed mock records when collections are empty
-  3. Start Flask API on port 5000
+  3. All DB operations happen directly via PyMongo (no Flask)
 
-Data ingestion (POST)
-  Collection module → POST /api/m35/ingest/{type}
-  Backend validates, assigns _id, stores in MongoDB
+Data ingestion (direct writes)
+  Collection module → db_client.ingest_*()
+  Validates, assigns _id, stores in MongoDB collection
 
-Retrieval (GET)
-  Dashboard → GET /api/m35/{collection}
-  Backend queries MongoDB, returns JSON
+Retrieval (direct reads)
+  Dashboard → db_client.get_*()
+  Queries MongoDB, returns Python dicts
 
 Benefit-Risk Calculation
   benefit_score     = (avg_improvement + avg_symptom_relief + avg_survival_days/365*100) / 3
@@ -407,15 +362,15 @@ Recommendation Ranking
         st.json({
             "database":    os.getenv("MONGO_DB", "therapy_database"),
             "collections": ["therapies", "responses", "side_effects", "cost_analysis"],
-            "api_base":    M35_API_BASE_URL,
+            "storage":     db_client.storage_label(),
         })
 
     # =========================================================================
-    # OUTPUT  (metrics via API)
+    # OUTPUT  (metrics)
     # =========================================================================
     elif tab == "📊 Output":
         st.markdown("### Benefit-Risk Summary")
-        st.caption("Metrics fetched via `GET /api/m35/metrics/{therapy_id}` or computed locally from collection data.")
+        st.caption("Metrics computed directly from MongoDB collection data.")
 
         metrics = _aggregate_metrics(therapies, responses, side_effects, cost_analysis)
 
@@ -428,17 +383,17 @@ Recommendation Ranking
         if metrics:
             st.dataframe(metrics, use_container_width=True)
 
-            # Individual therapy metrics via API
-            if online and therapies:
-                st.markdown("### Per-Therapy Metrics (via `GET /api/m35/metrics/{id}`)")
+            # Individual therapy metrics
+            if therapies:
+                st.markdown("### Per-Therapy Metrics")
                 sel_name = st.selectbox("Select therapy", [t.get("name", t.get("_id")) for t in therapies])
                 sel_therapy = next(
                     (t for t in therapies if t.get("name") == sel_name or t.get("_id") == sel_name), None
                 )
                 if sel_therapy:
                     tid = sel_therapy.get("_id") or sel_therapy.get("therapy_id")
-                    with st.spinner("Fetching metrics…"):
-                        m = _client().get_metrics(str(tid))
+                    with st.spinner("Computing metrics…"):
+                        m = db_client.get_metrics(str(tid))
                     if m:
                         mc1, mc2, mc3, mc4 = st.columns(4)
                         mc1.metric("Benefit-Risk Index", m.get("benefit_risk_index", "—"))
@@ -456,26 +411,15 @@ Recommendation Ranking
         st.write("Therapies ranked by `rank_score = benefit_risk_index − cost_per_qaly/100,000`. Higher = better.")
 
     # =========================================================================
-    # SEND TO DSL  (real POST)
+    # SEND TO DSL  (dispatch recommendations)
     # =========================================================================
     elif tab == "📤 Send to DSL":
         st.markdown("### Therapy Recommendations → Decision Support Layer (M13-M24)")
-        st.caption(
-            f"Recommendations fetched via `GET {M35_API_BASE_URL}/api/m35/recommendation`  "
-            f"then dispatched via `POST {M35_API_BASE_URL}/api/m35/recommendation/send-to-dsl`"
-        )
+        st.caption("Recommendations computed directly from MongoDB data and dispatched to DSL modules.")
 
-        if not online:
-            st.error("Backend must be running to send real recommendations. Start the Flask API first.")
-            st.info("When offline, the simulated payload below shows what would be sent.")
-
-        # Fetch (or compute) recommendations
-        if online:
-            with st.spinner("Fetching recommendations from API…"):
-                recommendations = _client().get_recommendations(limit=10)
-        else:
-            metrics = _aggregate_metrics(therapies, responses, side_effects, cost_analysis)
-            recommendations = sorted(metrics, key=lambda m: m.get("benefit_risk_index", 0), reverse=True)[:10]
+        # Fetch recommendations
+        with st.spinner("Computing recommendations…"):
+            recommendations = db_client.get_recommendations(limit=10)
 
         if not recommendations:
             st.warning("No recommendations available — ingest therapy and response data first.")
@@ -512,27 +456,21 @@ Recommendation Ranking
 
                 with st.spinner(f"Dispatching {top_n} recommendation(s) to {module_code}…"):
                     for rec in recommendations[:top_n]:
-                        if online:
-                            result = _client().send_recommendation_to_dsl(
-                                recommendation_data=rec,
-                                target_dsl_module=module_code,
-                                patient_id=pid,
-                                urgency=urgency,
-                            )
-                            if result.get("status") == "success":
-                                sent += 1
-                            else:
-                                failed += 1
+                        result = db_client.send_recommendation_to_dsl(
+                            recommendation_data=rec,
+                            target_dsl_module=module_code,
+                            patient_id=pid,
+                            urgency=urgency,
+                        )
+                        if result.get("status") == "success":
+                            sent += 1
                         else:
-                            sent += 1  # simulated
+                            failed += 1
 
-                if online:
-                    if failed == 0:
-                        st.success(f"✅ {sent}/{top_n} recommendation(s) dispatched to {module_code}.")
-                    else:
-                        st.warning(f"Sent {sent}, failed {failed}.")
+                if failed == 0:
+                    st.success(f"✅ {sent}/{top_n} recommendation(s) dispatched to {module_code}.")
                 else:
-                    st.info(f"[Simulated] {sent} recommendation(s) prepared for {module_code}.")
+                    st.warning(f"Sent {sent}, failed {failed}.")
 
                 st.markdown("#### Last dispatched payload")
                 last_rec = recommendations[0]
@@ -542,20 +480,18 @@ Recommendation Ranking
                     "urgency":          urgency,
                     "patient_id":       pid,
                     "recommendation":   last_rec,
-                    "mode":             "live" if online else "simulated",
                 })
 
             st.divider()
             st.markdown("#### Data Flow")
             st.code("""
 Collection Layer (M1, M2, M5, M25)
-  ↓  POST /api/m35/ingest/*
+  ↓  direct MongoDB writes
 M35 Processing & Analysis
   ├─ benefit_risk_index = benefit_score / (1 + avg_toxicity)
   ├─ cost_per_qaly      = total_cost / qalys
   └─ rank_score         = bri - cost_per_qaly/100,000
-  ↓  GET /api/m35/recommendation
-  ↓  POST /api/m35/recommendation/send-to-dsl
+  ↓  direct MongoDB reads → compute recommendations
 Decision Support Layer (M13 – M18)
             """, language="text")
 
