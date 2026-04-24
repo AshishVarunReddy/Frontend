@@ -248,6 +248,29 @@ class M35APIClient:
             logger.error(f"Error getting side effects: {str(e)}")
             return []
     
+    def get_cost_analysis(self, therapy_id: Optional[str] = None, limit: int = 100) -> List[Dict]:
+        """
+        GET cost analysis records
+
+        Args:
+            therapy_id: Filter by therapy
+            limit: Max results
+
+        Returns:
+            List of cost analysis documents
+        """
+        params = {"limit": limit}
+        if therapy_id:
+            params["therapy_id"] = therapy_id
+        try:
+            url = f"{self.base_url}/api/m35/cost-analysis"
+            response = requests.get(url, params=params, timeout=5)
+            data = response.json()
+            return data.get("data", []) if data.get("status") == "success" else []
+        except Exception as e:
+            logger.error(f"Error getting cost analysis: {str(e)}")
+            return []
+
     def get_metrics(self, therapy_id: str) -> Optional[Dict]:
         """
         GET aggregated metrics for therapy (Benefit-Risk Analysis)
